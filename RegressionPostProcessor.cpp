@@ -1,9 +1,8 @@
 #include <iostream>
-#include <cstdlib>
 #include <vector>
 #include <unordered_map>
 #include <nlohmann/json.hpp>
-#include<bits/stdc++.h>
+#include <fstream>
 #include <algorithm>
 
 using namespace std;
@@ -720,10 +719,9 @@ vector<vector<float>> RegressionPostProcessing::stack(vector<float> onsetTime, v
 
 int main()
 {
-    ifstream file("2_sec_json.json");
+    ifstream file("output.json");
     nlohmann::json jf = nlohmann::json::parse(file);
     unordered_map<string, vector<vector<float>>> jsonData = jf.get<unordered_map<string, vector<vector<float>>>>();
-    cout << "asd\n";
     RegressionPostProcessing reg;
     unordered_map<string,vector<unordered_map<string, float>>> out = reg.outputMapToMidiEvents(jsonData);
     vector<unordered_map<string, float>> notes = out["est_note_events"];
