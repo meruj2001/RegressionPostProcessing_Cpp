@@ -4,19 +4,23 @@
 #include <unordered_map>
 #include <nlohmann/json.hpp>
 #include<bits/stdc++.h>
+#include <algorithm>
 
 using namespace std;
 
-//For comparing 2nd column order
 bool sortcol(const vector<float>& v1,const vector<float>& v2) { 
     return v1[0] < v2[0]; 
+} 
+
+bool sortmap(const unordered_map<string, float>& v1,const unordered_map<string, float>& v2) { 
+    return v1.at("onset_time") < v2.at("onset_time"); 
 } 
 
 class RegressionPostProcessing {
     private:
         const int framesPerSecond = 100;
         const int classesNum = 88;
-        const float onsettThreshold = 0.3;
+        const float onsetThreshold = 0.3;
         const float offsetThreshold = 0.3;
         const float frameThreshold = 0.1;
         const float pedalOffset_threshold = 0.2;
@@ -24,13 +28,13 @@ class RegressionPostProcessing {
         const int velocityScale = 128;
     public:
         RegressionPostProcessing();
-        vector<  unordered_map<  string, float>>   outputMapToMidiEvents(unordered_map<string, vector<vector<vector<float>>>>);
+        unordered_map<string, vector<unordered_map<string, float>>>   outputMapToMidiEvents(unordered_map<string, vector<vector<float>>>);
 
         unordered_map<string, vector<vector<float>>>    outputMapToNotePedalArrays(unordered_map<string, vector<vector<float>>> );
 
         unordered_map<string, vector<vector<float>>>    getBinarizedOutputFromRegression(vector<vector<float>>, float, int);
 
-        vector<vector<  float>>   outputMapToDetectedNotes(unordered_map<string, vector<vector<float>>>);
+        vector<vector<float>>   outputMapToDetectedNotes(unordered_map<string, vector<vector<float>>>);
 
         vector<vector<float>>   outputMapToDetectedPedals(unordered_map<string, vector<vector<float>>>);
 
@@ -71,7 +75,7 @@ RegressionPostProcessing::RegressionPostProcessing(){
 
 }
 
-vector<unordered_map<string, float>> RegressionPostProcessing::outputMapToMidiEvents(unordered_map<string, vector<vector<vector<float>>>> outputMap) {
+unordered_map<string, vector<unordered_map<string, float>>> RegressionPostProcessing::outputMapToMidiEvents(unordered_map<string, vector<vector<float>>> outputMap) {
     /*
     * Main function. Post process model outputs to MIDI events.
 
@@ -94,19 +98,9 @@ vector<unordered_map<string, float>> RegressionPostProcessing::outputMapToMidiEv
         *    {'osnet_time': 1.17, 'offset_time': 2.65}]
     */
 
-    unordered_map<string, vector<vector<float>>> input;
-
-    for (auto it = outputMap.begin(); it != outputMap.end(); ++it) {
-        input[(*it).first] = outputMap[(*it).first][0];
-    }
-
-    // gets right value
-
     // Post process piano note outputs to piano note and pedal events information
-    unordered_map<string, vector<vector<float>>> estOnOffNoteVelsAndPedals = this->outputMapToNotePedalArrays(input);
+    unordered_map<string, vector<vector<float>>> estOnOffNoteVelsAndPedals = this->outputMapToNotePedalArrays(outputMap);
     vector<vector<float>> est_on_off_note_vels = estOnOffNoteVelsAndPedals["est_on_off_note_vels"];
-
-    cout << est_on_off_note_vels.size() << " size of estOnOffNoteVelsAndPedals \n";
 
     /*  
     * est_on_off_note_vels: (events_num, 4), the four columns are: [onset_time, offset_time, piano_note, velocity], 
@@ -122,7 +116,23 @@ vector<unordered_map<string, float>> RegressionPostProcessing::outputMapToMidiEv
         estPedalEvents = {};
     }
 
-    return estNoteEvents;
+    sort(estNoteEvents.begin(), estNoteEvents.end(), sortmap);
+    sort(estPedalEvents.begin(), estPedalEvents.end(), sortmap);
+    int i = 0;
+    while (i < estNoteEvents.size()) {
+        if (estNoteEvents[i].at("velocity") > 1.28 || estNoteEvents[i].at("velocity") <= 0) {
+            estNoteEvents.erase(estNoteEvents.begin() + i);
+        } else {
+            i++;
+        }
+    }
+
+    unordered_map<string, vector<unordered_map<string, float>>> output;
+
+    output["est_note_events"] = estNoteEvents;
+    output["est_pedal_events"] = estPedalEvents;
+
+    return output;
 }
 
 unordered_map<string, vector<vector<float>>> RegressionPostProcessing::outputMapToNotePedalArrays(unordered_map<string, vector<vector<float>>> outputMap) {
@@ -158,7 +168,7 @@ unordered_map<string, vector<vector<float>>> RegressionPostProcessing::outputMap
 
     // Calculate binarized onset output from regression output
     unordered_map<string, vector<vector<float>>> onsetBinarOutput = this->getBinarizedOutputFromRegression(
-                                        outputMap["reg_onset_output"], this->onsettThreshold, 2);
+                                        outputMap["reg_onset_output"], this->onsetThreshold, 2);
 
     outputMap["onset_output"] = onsetBinarOutput["output"]; // Values are 0 or 1
     outputMap["onset_shift_output"] = onsetBinarOutput["shift_output"];
@@ -189,17 +199,6 @@ unordered_map<string, vector<vector<float>>> RegressionPostProcessing::outputMap
     // ------ 2. Process matrices results to event results ------
     // Detect piano notes from output_dict
     vector<vector<float>> estOnOffNoteVels = this->outputMapToDetectedNotes(outputMap);
-
-    cout << "estOnOffNoteVels" << endl;
-
-    for (vector<float> vec : estOnOffNoteVels) {
-        for (float fl : vec) {
-            cout << fl << "\t";
-        }
-        cout << "\n";
-    }
-
-    cout << "a de el inch e";
 
     vector<vector<float>> estPedalOnOffs;
     if  (outputMap.find("reg_pedal_onset_output") != outputMap.end()) {
@@ -234,16 +233,13 @@ unordered_map<string,vector<vector<float>>> RegressionPostProcessing::getBinariz
 
     int framesNum = regOutput.size();
     int classesNum = regOutput[0].size();
-
+    
     for (int i = 0; i < classesNum; i++)
-    {
+    {   
         vector<float> x = this->slicing(regOutput,i);
-
         for (int n = neighbour; n < framesNum-neighbour; n++){
             if (x[n] > threshold && this->isMonotonicNeighbour(x, n, neighbour)){
-                cout << "baaa";
                 binaryOutput[n][i] = 1;
-
                 /*
                 *See Section III-D in [1] for deduction.
                 *    [1] Q. Kong, et al., High-resolution Piano Transcription 
@@ -252,10 +248,8 @@ unordered_map<string,vector<vector<float>>> RegressionPostProcessing::getBinariz
                 float shift;
                 if (x[n-1] > x[n+1]) {
                     shift = (x[n + 1] - x[n - 1]) / (x[n] - x[n + 1]) / 2;
-                    cout << "there" << endl;
                 } else {
                     shift = (x[n + 1] - x[n - 1]) / (x[n] - x[n - 1]) / 2;
-                    cout << "here" << endl;
                 }
 
                 shiftOutput[n][i] = shift;
@@ -267,22 +261,6 @@ unordered_map<string,vector<vector<float>>> RegressionPostProcessing::getBinariz
     out["output"] = binaryOutput;
     out["shift_output"] = shiftOutput;
     
-    // for (vector<float> vec : binaryOutput) {
-    //     for (float fl : vec) {
-    //         cout << fl << " ";
-    //     }
-    //     cout << endl;
-    // }
-
-    // for (vector<float> vec : shiftOutput) {
-    //     for (float fl : vec) {
-    //         cout << fl << " ";
-    //     }
-    //     cout << endl;
-    // }
-
-
-    // cout << "end of getBin.... \n";
     return out;
 }
 
@@ -636,7 +614,7 @@ bool RegressionPostProcessing::isMonotonicNeighbour(vector<float> x, int n, int 
     *      monotonic: bool
     * */
     bool monotonic = true;
-    for(int i = 0; i <= n; i++){
+    for(int i = 0; i <= neighbour; i++){
             if(x[n-i] < x[n-i-1]) {
                 monotonic = false;
             }
@@ -742,21 +720,20 @@ vector<vector<float>> RegressionPostProcessing::stack(vector<float> onsetTime, v
 
 int main()
 {
-    ifstream file("note_pedal_output_10_sec.json");
+    ifstream file("2_sec_json.json");
     nlohmann::json jf = nlohmann::json::parse(file);
-    unordered_map<string, vector<vector<vector<float>>>> jsonData = jf.get<unordered_map<string, vector<vector<vector<float>>>>>();
+    unordered_map<string, vector<vector<float>>> jsonData = jf.get<unordered_map<string, vector<vector<float>>>>();
+    cout << "asd\n";
     RegressionPostProcessing reg;
-    vector<unordered_map<string, float>> notes = reg.outputMapToMidiEvents(jsonData);
-    
-    cout << notes.size() << "size of notes\n";
+    unordered_map<string,vector<unordered_map<string, float>>> out = reg.outputMapToMidiEvents(jsonData);
+    vector<unordered_map<string, float>> notes = out["est_note_events"];
+    cout << notes.size() << endl;
     for (unordered_map<string, float> noteEvent : notes) {
-        // cout << "onset_time : " << noteEvent["onset_time"] << "\t";
-        // cout << "offset_time : " << noteEvent["offset_time"] << "\t";
-        // cout << "midi_note : " << noteEvent["midi_note"] << "\t";
-        // cout << "velocity : " << noteEvent["velocity"] << "\n";
-        for (auto it = noteEvent.begin(); it != noteEvent.end(); ++it) {
-            cout << (*it).first << endl;
-        }
+        cout << "{\"onset_time\", " << noteEvent["onset_time"] << ",\t";
+        cout << "\"offset_time\", " << noteEvent["offset_time"] << ",\t";
+        cout << "\"midi_note\", " << noteEvent["midi_note"] << ",\t";
+        cout << "\"velocity\", " << noteEvent["velocity"] << "},\n";
     }
+
     return 0;
 }
